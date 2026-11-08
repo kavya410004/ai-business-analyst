@@ -49,12 +49,12 @@ Metrics evaluating commercial inflow, bookings velocity, and billing output.
 - **Parameters**: `quarter`, `currency` (derived from parent deal), `segment`, `region`.
 - **Sample Size & Metadata**: Must report `invoices_count` and total monetary sum per currency.
 
-### 2.3 Cash Collections (Cash-Flow Proxy)
+### 2.3 Collections Proxy (Cash-Flow Indicator)
 *Salesforce Terminology: Realized / Paid Invoices*
 - **Definition**: The total cash received on invoices paid during the evaluation period.
-- **Accounting Clarification**: Cash collections measures actual customer remittances. It functions as a **cash-flow and working-capital proxy**, not recognized revenue.
+- **Accounting Clarification**: Collections proxy measures actual customer cash remittances. It functions as a **cash-flow and working-capital proxy**, not recognized revenue.
 - **Formula**:
-  $$\text{Cash Collections} = \sum \text{invoices.amount} \quad \text{WHERE } \text{paid\_date} \in [\text{start\_date}, \text{end\_date}]$$
+  $$\text{Collections Proxy} = \sum \text{invoices.amount} \quad \text{WHERE } \text{paid\_date} \in [\text{start\_date}, \text{end\_date}]$$
 - **Parameters**: `quarter`, `currency`, `segment`, `region`.
 
 ### 2.4 Period-over-Period Variance (QoQ % Change)
@@ -97,17 +97,16 @@ Metrics tracking deal progression, conversion efficiency, and pipeline dynamics.
   $$\text{Win Rate}_{\text{Value}} = \frac{\sum \text{Won Deal Amount}}{\sum \text{Won Deal Amount} + \sum \text{Lost Deal Amount}} \times 100\%$$
 - **Missing Value Handling**: Deals with `amount IS NULL` are excluded from both numerator and denominator; counts of included and excluded deals are reported.
 
-### 3.3 Win Rate Change Diagnostics (Shift-Share Decomposition)
+### 3.3 Win Rate Change Diagnostics (Two-Component Kitagawa Decomposition)
 *Salesforce Terminology: Pipeline Mix vs. Conversion Variance Analysis*
 - **Definition**: A mathematical decomposition that isolates whether a period-over-period change in aggregate win rate was driven by changes in sales effectiveness (rate effect) or by changes in pipeline composition (mix effect / Simpson's Paradox).
 - **Mathematical Framework**:
-  Let $W$ be the aggregate win rate, $r_i$ be the win rate in cohort $i$ (e.g. segment or region), and $w_i = \frac{N_i}{N}$ be cohort $i$'s proportion of total closed deals, such that:
-  $$W = \sum_{i} w_i r_i$$
-  Between base period $b$ (e.g., Q2) and target period $t$ (e.g., Q3), the total change $\Delta W = W_t - W_b$ is decomposed using the exact 3-factor Shift-Share (Kitagawa) decomposition:
-  $$\Delta W = \underbrace{\sum_{i} w_{i, b} \cdot (r_{i, t} - r_{i, b})}_{\text{Within-Cohort Rate Effect}} + \underbrace{\sum_{i} r_{i, b} \cdot (w_{i, t} - w_{i, b})}_{\text{Pipeline Mix Effect}} + \underbrace{\sum_{i} (w_{i, t} - w_{i, b}) \cdot (r_{i, t} - r_{i, b})}_{\text{Interaction / Cross-Product Effect}}$$
-  - **Within-Cohort Rate Effect**: The portion of win rate change caused by genuine increases or decreases in conversion efficiency within individual segments, holding pipeline mix constant at base-period levels.
-  - **Pipeline Mix Effect**: The portion of win rate change caused by shifting deal volume toward inherently higher- or lower-converting segments, holding segment conversion rates constant at base-period levels.
-  - **Interaction Effect**: The joint covariance between shifting proportions and changing rates.
+  Let $W$ be the aggregate win rate, $r_i$ be the win rate in cohort $i$ (e.g. segment or region), and $w_i = \frac{N_i}{N}$ be cohort $i$'s proportion of total closed deals, such that $W = \sum_{i} w_i r_i$.
+  Between base period $b$ (e.g., Q2) and target period $t$ (e.g., Q3), the total change $\Delta W = W_t - W_b$ is decomposed using the **two-component Kitagawa formula** (symmetric midpoint weights):
+  $$\Delta W = \underbrace{\sum_{i} \left(\frac{w_{i, b} + w_{i, t}}{2}\right) \cdot (r_{i, t} - r_{i, b})}_{\text{Within-Cohort Rate Effect}} + \underbrace{\sum_{i} \left(\frac{r_{i, b} + r_{i, t}}{2}\right) \cdot (w_{i, t} - w_{i, b})}_{\text{Pipeline Mix Effect}}$$
+  - **Within-Cohort Rate Effect**: The portion of win rate change caused by genuine increases or decreases in conversion efficiency within individual segments.
+  - **Pipeline Mix Effect**: The portion of win rate change caused by shifting deal volume toward inherently higher- or lower-converting segments.
+  - **Identity**: $\Delta W = \text{Rate Effect} + \text{Mix Effect}$ identically.
 - **Assignment Mapping**: **Question 3** (*"Why did win rate drop in Q3?"*).
 
 ---
@@ -130,33 +129,35 @@ Invoices are strictly categorized into distinct states:
 ### 4.2 Days to Pay (Invoice Payment Turnaround)
 *Salesforce Terminology: Payment Turnaround Time / Average Days to Pay*
 - **Definition**: The elapsed calendar days between the date an invoice was issued and the date payment was received.
-- **Scope Restriction**: Calculated **only** for paid invoices (`paid_date IS NOT NULL`). Unpaid invoices have undefined turnaround time and must never be assigned an arbitrary turnaround or zero.
+- **Scope Restriction**: Calculated **only** for paid invoices with valid non-negative chronologies (`paid_date >= issued_date`). Unpaid invoices have undefined turnaround time and must never be assigned an arbitrary turnaround or zero.
+- **Anomalous Date Exclusion**: Exactly 6 invoices in the dataset have `paid_date < issued_date`. These records are **excluded** from turnaround metrics and reported in metadata under `records_excluded_anomalies_count`.
 - **Formula**:
-  $$\text{Days to Pay} = \text{invoices.paid\_date} - \text{invoices.issued\_date}$$
+  $$\text{Days to Pay} = \text{invoices.paid\_date} - \text{invoices.issued\_date} \quad \text{WHERE } \text{paid\_date} \ge \text{issued\_date}$$
 - **Statistical Measures**:
-  - **Mean Days to Pay**: $\frac{\sum \text{Days to Pay}}{N_{\text{paid}}}$
+  - **Mean Days to Pay**: $\frac{\sum \text{Days to Pay}}{N_{\text{valid\_paid}}}$
   - **Median Days to Pay**: 50th percentile of Days to Pay (primary operational metric to avoid outlier distortion).
-- **Mandatory Sample Size Reporting**: Must explicitly report $N_{\text{paid}}$ (count of paid invoices evaluated) alongside mean and median.
+- **Mandatory Sample Size Reporting**: Must explicitly report $N_{\text{valid\_paid}}$ (count of valid paid invoices evaluated) alongside mean and median.
 - **Assignment Mapping**: **Question 4** (*"Which segment pays us slowest?"*).
 
 ### 4.3 Days Past Due (Payment Delinquency on Paid Invoices)
 *Salesforce Terminology: Collection Delay / Days Past Due*
 - **Definition**: The number of calendar days an invoice payment arrived past its contractually agreed due date.
 - **Formula**:
-  $$\text{Days Past Due} = \text{invoices.paid\_date} - \text{invoices.due\_date}$$
+  $$\text{Days Past Due} = \text{invoices.paid\_date} - \text{invoices.due\_date} \quad \text{WHERE } \text{paid\_date} \ge \text{issued\_date}$$
   - $\text{Days Past Due} > 0$: Payment was late.
   - $\text{Days Past Due} \le 0$: Payment was on time or early.
-- **Mandatory Sample Size**: Must report $N_{\text{paid}}$ and distribution (mean, median).
+- **Mandatory Sample Size**: Must report $N_{\text{valid\_paid}}$ and distribution (mean, median).
 
 ### 4.4 Outstanding Receivables & Overdue Exposure
 *Salesforce Terminology: Open Invoices / Overdue Aging*
-- **Definition**: Monetary exposure and record counts of invoices that have not yet been settled (`paid_date IS NULL`).
+- **Definition**: Monetary exposure and record counts of invoices that have not yet been settled (`paid_date IS NULL`) as of a specified evaluation date (`as_of_date`).
 - **Breakdown**:
   - `total_unpaid_count`: Total open invoices.
   - `total_unpaid_amount`: Total open monetary balance per currency.
-  - `overdue_unpaid_count`: Invoices where `due_date < as_of_date`.
-  - `overdue_unpaid_amount`: Balance past due date per currency.
-  - `current_unpaid_count`: Invoices within payment terms (`due_date >= as_of_date`).
+  - `current_unpaid_count`: Invoices within terms (`due_date >= as_of_date`).
+  - `current_unpaid_amount`: Balance within terms per currency.
+  - `overdue_unpaid_count`: Invoices past due date (`due_date < as_of_date`).
+  - `overdue_unpaid_amount`: Overdue balance per currency.
 
 ---
 
