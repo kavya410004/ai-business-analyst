@@ -3,21 +3,31 @@
 Verifies:
 1. Tool discovery (all 6 tools listed with complete schemas).
 2. End-to-end tool execution solving the 5 core assignment questions.
-3. Defensive error handling (graceful handling of invalid inputs without crashing).
+3. Defensive error handling: invalid inputs produce is_error=True MCP results,
+   never silently returning error dicts as valid analytical data.
 """
 
 import asyncio
 import json
 import unittest
 
+from mcp.server.mcpserver.exceptions import ToolError
 from src.mcp_server.server import create_server
 from src.mcp_server.tools import (
+    _ValidationError,
     diagnose_win_rate_change,
     get_executive_scorecard,
     get_outstanding_receivables,
     get_payment_speed_analysis,
     get_quarterly_revenue_comparison,
     get_win_rate_analysis,
+    validate_currency,
+    validate_dimension,
+    validate_iso_date,
+    validate_quarter,
+    validate_region,
+    validate_revenue_type,
+    validate_segment,
 )
 
 
@@ -53,7 +63,28 @@ class TestMCPServer(unittest.IsolatedAsyncioTestCase):
     # 2. End-to-End Tool Execution (Assignment Questions 1 - 5)
     # -----------------------------------------------------------------------
     async def test_tool_q1_revenue_comparison(self):
-        """Verify get_quarterly_revenue_comparison via MCP call_tool."""
+        """Verify get_quarterly_revenue_comparison returns invoiced_amount by default (primary revenue metric)."""
+        call_res = await self.server.call_tool(
+            "get_quarterly_revenue_comparison",
+            {
+                "current_quarter": "2026Q3",
+                "previous_quarter": "2026Q2",
+                # revenue_type omitted: default is "invoiced_amount" (primary assignment metric)
+            },
+        )
+        self.assertFalse(call_res.is_error)
+        payload = json.loads(call_res.content[0].text)
+
+        self.assertNotIn("error", payload)
+        self.assertIn("summary", payload)
+        by_curr = payload["summary"]["by_currency"]
+
+        # USD Invoiced Amount Q3: $5,505,400 (+71.16%)
+        self.assertEqual(by_curr["USD"]["current_value"], 5505400.0)
+        self.assertAlmostEqual(by_curr["USD"]["growth_pct"], 71.16, places=1)
+
+    async def test_tool_q1_bookings_comparison(self):
+        """Verify closed_won_bookings revenue_type works correctly and matches ground truth."""
         call_res = await self.server.call_tool(
             "get_quarterly_revenue_comparison",
             {
@@ -66,7 +97,6 @@ class TestMCPServer(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(call_res.content[0].text)
 
         self.assertNotIn("error", payload)
-        self.assertIn("summary", payload)
         by_curr = payload["summary"]["by_currency"]
 
         # USD Bookings Q3: $5,619,100 (+75.98%)
@@ -160,49 +190,104 @@ class TestMCPServer(unittest.IsolatedAsyncioTestCase):
 
     # -----------------------------------------------------------------------
     # 3. Defensive Programming & Error Boundary Tests
+    #    Invalid inputs must raise ToolError (which the MCP protocol layer converts
+    #    to is_error=True). Never silently returns error metadata as valid data.
     # -----------------------------------------------------------------------
-    def test_defensive_invalid_quarter_handling(self):
-        """Verify invalid quarter string returns structured error payload."""
-        res = get_quarterly_revenue_comparison(current_quarter="2026-X")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("error_code"), "INVALID_ARGUMENT")
-        self.assertIn("Invalid quarter", res.get("message", ""))
+    async def test_defensive_invalid_quarter_handling(self):
+        """Verify invalid quarter string raises ToolError with informative message."""
+        with self.assertRaises(ToolError) as ctx:
+            await self.server.call_tool(
+                "get_quarterly_revenue_comparison",
+                {"current_quarter": "2026-X", "previous_quarter": "2026Q2"},
+            )
+        self.assertIn("Invalid quarter", str(ctx.exception))
 
-    def test_defensive_invalid_currency_handling(self):
-        """Verify unsupported currency returns structured error payload."""
-        res = get_quarterly_revenue_comparison(currency="EUR")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("error_code"), "INVALID_ARGUMENT")
-        self.assertIn("Unsupported currency", res.get("message", ""))
+    async def test_defensive_invalid_currency_handling(self):
+        """Verify unsupported currency raises ToolError with informative message."""
+        with self.assertRaises(ToolError) as ctx:
+            await self.server.call_tool(
+                "get_quarterly_revenue_comparison",
+                {"current_quarter": "2026Q3", "previous_quarter": "2026Q2", "currency": "EUR"},
+            )
+        self.assertIn("Unsupported currency", str(ctx.exception))
 
-    def test_defensive_invalid_dimension_handling(self):
-        """Verify unsupported dimension returns structured error payload."""
-        res = get_win_rate_analysis(dimension="extraterrestrial")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("error_code"), "INVALID_ARGUMENT")
-        self.assertIn("Invalid dimension", res.get("message", ""))
+    async def test_defensive_invalid_dimension_handling(self):
+        """Verify unsupported dimension raises ToolError with informative message."""
+        with self.assertRaises(ToolError) as ctx:
+            await self.server.call_tool(
+                "get_win_rate_analysis",
+                {"dimension": "extraterrestrial"},
+            )
+        self.assertIn("Invalid dimension", str(ctx.exception))
 
-    def test_defensive_invalid_revenue_type(self):
-        """Verify unsupported revenue_type returns structured error payload."""
-        res = get_quarterly_revenue_comparison(revenue_type="magic_money")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("error_code"), "INVALID_ARGUMENT")
-        self.assertIn("Invalid revenue_type", res.get("message", ""))
+    async def test_defensive_invalid_revenue_type(self):
+        """Verify unsupported revenue_type raises ToolError with informative message."""
+        with self.assertRaises(ToolError) as ctx:
+            await self.server.call_tool(
+                "get_quarterly_revenue_comparison",
+                {"current_quarter": "2026Q3", "previous_quarter": "2026Q2", "revenue_type": "magic_money"},
+            )
+        self.assertIn("Invalid revenue_type", str(ctx.exception))
 
-    def test_defensive_invalid_date_format(self):
-        """Verify non-ISO date string returns structured error payload."""
-        res = get_outstanding_receivables(as_of_date="30/09/2026")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("error_code"), "INVALID_ARGUMENT")
-        self.assertIn("Invalid date format", res.get("message", ""))
+    async def test_defensive_invalid_date_format(self):
+        """Verify non-ISO date string raises ToolError with informative message."""
+        with self.assertRaises(ToolError) as ctx:
+            await self.server.call_tool(
+                "get_outstanding_receivables",
+                {"as_of_date": "30/09/2026", "dimension": "segment"},
+            )
+        self.assertIn("Invalid date format", str(ctx.exception))
 
-    def test_defensive_invalid_segment_filter(self):
-        """Verify invalid customer segment returns structured error payload."""
-        res = get_win_rate_analysis(segment="MegaEnterprise")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("error_code"), "INVALID_ARGUMENT")
-        self.assertIn("Invalid customer segment", res.get("message", ""))
+    async def test_defensive_invalid_segment_filter(self):
+        """Verify invalid customer segment raises ToolError with informative message."""
+        with self.assertRaises(ToolError) as ctx:
+            await self.server.call_tool(
+                "get_win_rate_analysis",
+                {"dimension": "region", "segment": "MegaEnterprise"},
+            )
+        self.assertIn("Invalid customer segment", str(ctx.exception))
+
+    # -----------------------------------------------------------------------
+    # 4. Validator Type-Guard Unit Tests
+    #    Non-string inputs must produce _ValidationError, not unexpected exceptions.
+    # -----------------------------------------------------------------------
+    def test_validate_currency_non_string_raises(self):
+        """Non-string currency must raise _ValidationError, not AttributeError."""
+        with self.assertRaises(_ValidationError) as ctx:
+            validate_currency(123)
+        self.assertIn("string", str(ctx.exception))
+
+    def test_validate_segment_non_string_raises(self):
+        """Non-string segment must raise _ValidationError."""
+        with self.assertRaises(_ValidationError):
+            validate_segment(42)
+
+    def test_validate_region_non_string_raises(self):
+        """Non-string region must raise _ValidationError."""
+        with self.assertRaises(_ValidationError):
+            validate_region(["North"])
+
+    def test_validate_iso_date_non_string_raises(self):
+        """Non-string as_of_date must raise _ValidationError."""
+        with self.assertRaises(_ValidationError):
+            validate_iso_date(20260930, "as_of_date")
+
+    def test_validate_quarter_non_string_raises(self):
+        """Non-string quarter must raise _ValidationError."""
+        with self.assertRaises(_ValidationError):
+            validate_quarter(20263, "quarter")
+
+    def test_validate_revenue_type_non_string_raises(self):
+        """Non-string revenue_type must raise _ValidationError."""
+        with self.assertRaises(_ValidationError):
+            validate_revenue_type(None)
+
+    def test_validate_dimension_non_string_raises(self):
+        """Non-string dimension must raise _ValidationError."""
+        with self.assertRaises(_ValidationError):
+            validate_dimension(42, {"region", "segment"}, "dimension")
 
 
 if __name__ == "__main__":
     unittest.main()
+

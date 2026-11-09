@@ -40,8 +40,9 @@ def create_server(name: str = "ai-business-analyst-mcp") -> MCPServer:
     server.tool(
         name="get_quarterly_revenue_comparison",
         description=(
-            "Compare commercial revenue/bookings between two quarters (e.g. Q3 vs Q2 2026). "
+            "Compare commercial revenue between two quarters (e.g. Q3 vs Q2 2026). "
             "Answers: 'What was total revenue last quarter, and how does it compare to the quarter before?' "
+            "Default metric is 'invoiced_amount' (billed revenue). Use 'closed_won_bookings' for deal bookings. "
             "Reports separate totals for USD and INR without synthetic conversion."
         ),
     )(get_quarterly_revenue_comparison)
@@ -77,7 +78,9 @@ def create_server(name: str = "ai-business-analyst-mcp") -> MCPServer:
         name="get_outstanding_receivables",
         description=(
             "Analyze accounts receivable aging and open invoice balance evaluated as of an anchor date. "
-            "Strictly distinguishes current unpaid invoices within terms from overdue unpaid invoices."
+            "Strictly distinguishes current unpaid invoices within terms from overdue unpaid invoices. "
+            "IMPORTANT: The default evaluation date is '2026-09-30' (end of Q3 2026, the dataset snapshot date). "
+            "Always communicate this date when presenting receivables figures to the user."
         ),
     )(get_outstanding_receivables)
 
@@ -86,7 +89,9 @@ def create_server(name: str = "ai-business-analyst-mcp") -> MCPServer:
         description=(
             "Generate an integrated multi-dimensional executive performance scorecard. "
             "Answers: 'How are we doing?' "
-            "Synthesizes Commercial Growth, Sales Efficiency, Pipeline Health, and Collection Risk."
+            "Synthesizes Commercial Growth, Sales Efficiency, Pipeline Health, and Collection Risk. "
+            "IMPORTANT: Receivables figures are evaluated as of '2026-09-30' (end of Q3 2026) by default. "
+            "Always communicate this evaluation date when presenting collection risk data."
         ),
     )(get_executive_scorecard)
 
@@ -114,3 +119,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
