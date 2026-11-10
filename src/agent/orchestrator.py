@@ -21,6 +21,7 @@ class AgentOrchestrator:
 
     def __init__(self):
         self.provider = GeminiProvider()
+        self.contents = []
 
         self.server_params = StdioServerParameters(
             command=sys.executable,
@@ -42,12 +43,13 @@ class AgentOrchestrator:
                     available_tools
                 )
 
-                contents = [
-                    {
-                        "role": "user",
-                        "parts": [{"text": question}],
-                    }
-                ]
+                contents = self.contents
+
+                contents.append({
+                    "role": "user",
+                    "parts": [{"text": question}],
+                })
+               
                 executed_calls = set()
                 for iteration in range(MAX_ITERATIONS):
 
@@ -90,6 +92,23 @@ class AgentOrchestrator:
                             json.dumps(arguments, sort_keys=True, default=str),
                         )
                         if call_signature in executed_calls:
+                            contents.append({
+                                "role": "user",
+                                "parts": [{
+                                    "function_response": {
+                                        "name": tool_name,
+                                        "response": {
+                                            "result": {
+                                                "error": True,
+                                                "details": (
+                                                    "This identical tool call was already "
+                                                    "executed. Use the previous result."
+                                                ),
+                                            }
+                                        },
+                                    }
+                                }],
+                            })
                             continue
                         executed_calls.add(call_signature)
                         
@@ -171,3 +190,6 @@ class AgentOrchestrator:
             return parsed[0]
 
         return parsed
+    
+        def reset_conversation(self):
+            self.contents = []
